@@ -40,6 +40,122 @@ static int ext2_release_file (struct inode * inode, struct file * filp)
 	return 0;
 }
 
+/*
+ * COMP3301
+ *
+ *
+ *
+ */
+
+ssize_t write_encrypt (struct file* f, const char __user* buffer,
+	size_t length, loff_t* pos) {
+
+	ssize_t result;
+	int n;
+    struct dentry *loop, *last;
+    mm_segment_t user_filesystem;
+    char* new_buffer = kmalloc(length, GFP_NOFS);
+    int crypt = 0;
+    memset(new_buffer, 0, length);
+
+    // Check to see if file should be encrypted
+    if (f != NULL) {
+        if (f->f_dentry != NULL && &f->f_dentry->d_name != NULL) {
+    	  	last = NULL;
+          	loop = f->f_dentry->d_parent;
+
+            while (loop != NULL) {
+            	if (!strncmp(loop->d_name.name, "/", 2)) {
+                	if (last != NULL &&
+                		!strncmp(last->d_name.name, EXT_ENCRYPTION_DIRECTORY,
+                			strlen(EXT_ENCRYPTION_DIRECTORY) + 2)) {
+                            crypt = 1;
+                			// Encrypt Buffer
+                			for (n = 0; n < length; n++) {
+                				new_buffer[n] = buffer[n] ^ encryption_key; // XOR
+                			}
+
+                	}
+                	break;
+            	}
+				last = loop;
+				loop = loop->d_parent;
+            }
+        }
+    }
+
+	// Must switch to Kernel Space before writing
+    user_filesystem = get_fs();
+    set_fs(KERNEL_DS);
+
+	// Check if we are writing the encrypted buffer or the original buffer
+    if (crypt) {
+    	result = do_sync_write(f, new_buffer, length, pos);
+    } else {
+    	result = do_sync_write(f, buffer, length, pos);
+    }
+
+	set_fs(user_filesystem);
+	kfree(new_buffer);
+	return result;
+}
+
+
+/*
+ *
+ *
+ *
+ */
+ssize_t read_encrypt(struct file* f, char __user* buffer,
+	size_t length, loff_t* pos) {
+
+	ssize_t result;
+	int n;
+    struct dentry *loop, *last;
+    mm_segment_t user_filesystem;
+    char* new_buffer = kmalloc(length, GFP_NOFS);
+    int crypt = 0;
+    memset(new_buffer, 0, length);
+
+   	user_filesystem = get_fs();
+   	set_fs(KERNEL_DS);
+   	result = do_sync_read(f, new_buffer, length, pos);
+   	set_fs(user_filesystem);
+
+	// Check to see if file is encrypted
+	if (f != NULL) {
+		if (f->f_dentry != NULL && &f->f_dentry->d_name != NULL) {
+			last = NULL;
+			loop = f->f_dentry->d_parent;
+
+			while (loop != NULL) {
+				if (!strncmp(loop->d_name.name, "/", 2)) {
+					if (last != NULL &&
+						!strncmp(last->d_name.name, EXT_ENCRYPTION_DIRECTORY,
+							strlen(EXT_ENCRYPTION_DIRECTORY) + 2)) {
+							crypt = 1;
+							// Decrypt Buffer
+							for (n = 0; n < length; n++) {
+								new_buffer[n] = buffer[n] ^ encryption_key; // XOR
+							}
+							new_buffer[length] = (char) 0;
+					}
+					break;
+				}
+				last = loop;
+				loop = loop->d_parent;
+			}
+		}
+	}
+
+    // Copy to User Space
+    copy_to_user(buffer, new_buffer, length);
+	kfree(new_buffer);
+	return result;
+}
+
+
+
 int ext2_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 {
 	int ret;
@@ -59,11 +175,14 @@ int ext2_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 /*
  * We have mostly NULL's here: the current defaults are ok for
  * the ext2 filesystem.
+ *
+ * COMP3301
+ * 	Ensure read/write will try to encrypt in the right folder
  */
 const struct file_operations ext2_file_operations = {
 	.llseek		= generic_file_llseek,
-	.read		= do_sync_read,
-	.write		= do_sync_write,
+	.read		= read_encrypt,
+	.write		= write_encrypt,
 	.aio_read	= generic_file_aio_read,
 	.aio_write	= generic_file_aio_write,
 	.unlocked_ioctl = ext2_ioctl,

@@ -16,6 +16,15 @@
 #include <linux/percpu_counter.h>
 #include <linux/rbtree.h>
 
+
+/*
+ * COMP3301
+ * Variables and defines COMP3301 ext
+ * Aaron Hayes
+ */
+#define EXT_ENCRYPTION_DIRECTORY "encrypt"
+extern int encryption_key;
+
 /* XXX Here for now... not interested in restructing headers JUST now */
 
 /* data type for block offset of block group */

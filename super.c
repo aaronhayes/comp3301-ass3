@@ -37,6 +37,8 @@
 #include "acl.h"
 #include "xip.h"
 
+int encryption_key;
+
 static void ext2_sync_super(struct super_block *sb,
 			    struct ext2_super_block *es, int wait);
 static int ext2_remount (struct super_block * sb, int * flags, char * data);
@@ -395,7 +397,8 @@ enum {
 	Opt_err_ro, Opt_nouid32, Opt_nocheck, Opt_debug,
 	Opt_oldalloc, Opt_orlov, Opt_nobh, Opt_user_xattr, Opt_nouser_xattr,
 	Opt_acl, Opt_noacl, Opt_xip, Opt_ignore, Opt_err, Opt_quota,
-	Opt_usrquota, Opt_grpquota, Opt_reservation, Opt_noreservation
+	Opt_usrquota, Opt_grpquota, Opt_reservation, Opt_noreservation,
+	Opt_key
 };
 
 static const match_table_t tokens = {
@@ -429,6 +432,7 @@ static const match_table_t tokens = {
 	{Opt_usrquota, "usrquota"},
 	{Opt_reservation, "reservation"},
 	{Opt_noreservation, "noreservation"},
+	{Opt_key, "key=%s"},
 	{Opt_err, NULL}
 };
 
@@ -440,6 +444,10 @@ static int parse_options(char *options, struct super_block *sb)
 	int option;
 	kuid_t uid;
 	kgid_t gid;
+
+	// COMP3301 Variables
+    char *code_string;
+	int length, code;
 
 	if (!options)
 		return 1;
@@ -582,6 +590,17 @@ static int parse_options(char *options, struct super_block *sb)
 		case Opt_noreservation:
 			clear_opt(sbi->s_mount_opt, RESERVATION);
 			ext2_msg(sb, KERN_INFO, "reservations OFF");
+			break;
+		case Opt_key:
+		    length = strlen(args[0].from) - strlen(args[0].to) + 1;
+		    code_string = vmalloc(length);
+		    if (!match_strlcpy(code_string, &args[0], length)) {
+		    	vfree(code_string);
+		    	return 0;
+		    }
+			sscanf(code_string, "0x%02X", &code);
+			encryption_key = 0xFF & code;
+			vfree(code_string);
 			break;
 		case Opt_ignore:
 			break;
@@ -860,6 +879,8 @@ static int ext2_fill_super(struct super_block *sb, void *data, int silent)
 	sbi->s_resgid = make_kgid(&init_user_ns, le16_to_cpu(es->s_def_resgid));
 	
 	set_opt(sbi->s_mount_opt, RESERVATION);
+
+	encryption_key = 0;
 
 	if (!parse_options((char *) data, sb))
 		goto failed_mount;
