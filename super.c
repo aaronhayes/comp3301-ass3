@@ -445,7 +445,7 @@ static int parse_options(char *options, struct super_block *sb)
 	kuid_t uid;
 	kgid_t gid;
 
-	// COMP3301 Variables
+	/* COMP3301 Variables */
     char *code_string;
 	int length, code;
 
