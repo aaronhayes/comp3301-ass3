@@ -32,6 +32,7 @@
 
 #include <linux/pagemap.h>
 #include <linux/quotaops.h>
+#include <linux/file.h>
 #include "ext2.h"
 #include "xattr.h"
 #include "acl.h"
@@ -297,6 +298,74 @@ static int ext2_rmdir (struct inode * dir, struct dentry *dentry)
 	return err;
 }
 
+/*
+ * Check if a file is being moved into the /encrypt folder.
+ * Return 1 for true, 0 otherwise
+ */
+static int needs_to_encrypt(struct dentry *old_dentry, struct dentry *new_dentry) {
+	if ((strcmp(old_dentry->d_parent->d_name.name, new_dentry->d_parent->d_name.name))
+		&& (!strcmp(new_dentry->d_parent->d_name.name, EXT_ENCRYPTION_DIRECTORY))
+		&& (!strcmp(new_dentry->d_parent->d_parent->d_name.name, "/")))
+			return 1;
+	return 0;
+}
+
+/*
+ * Check if a file is being moved from the /encrypt folder.
+ * Return 1 for true, 0 otherwise
+ */
+static int needs_to_decrypt(struct dentry *old_dentry, struct dentry *new_dentry) {
+	if ((strcmp(old_dentry->d_parent->d_name.name, new_dentry->d_parent->d_name.name))
+		&& (!strcmp(old_dentry->d_parent->d_name.name, EXT_ENCRYPTION_DIRECTORY))
+		&& (!strcmp(old_dentry->d_parent->d_parent->d_name.name, "/")))
+			return 1;
+	return 0;
+}
+
+/*
+ *  Run encryption/decryptino on a buffer
+ */
+void crypt_buffer(char *buffer, ssize_t length) {
+	int i;
+	for (i = 0; i < length; i++) {
+		if (buffer[i] != '\0') {
+			buffer[i] = buffer[i] ^ encryption_key;
+		}
+	}
+}
+
+/*
+ * Encrypt/Decrypt data if being moved into the /encrypt folder.
+ */
+static void crypt_data(struct inode *old_dir, struct dentry *old_dentry,
+	struct inode *new_dir, struct dentry *new_dentry) {
+
+	struct file *filp = filp_open(old_dentry->d_name.name, O_RDWR, old_dentry->d_inode->i_mode);
+	char *new_buffer = (char *)kmalloc(sizeof(char) * old_dentry->d_inode->i_size, GFP_KERNEL);
+	mm_segment_t user_filesystem = get_fs();
+	loff_t ppos = 0;
+	ssize_t length;
+
+	/* Set to Kernel space */
+	set_fs(get_ds());
+
+	/* Put data into buffer */
+	length = filp->f_op->read(filp, new_buffer, old_dentry->d_inode->i_size, &ppos);
+
+	/* Run encryption on data */
+	crypt_buffer(new_buffer, length);
+	ppos = 0;
+
+	/* Write buffer to file */
+	length = filp->f_op->write(filp, new_buffer, old_dentry->d_inode->i_size, &ppos);
+	fput(filp);
+
+	/* Swap back to user space */
+	set_fs(user_filesystem);
+
+	kfree(new_buffer);
+}
+
 static int ext2_rename (struct inode * old_dir, struct dentry * old_dentry,
 	struct inode * new_dir,	struct dentry * new_dentry )
 {
@@ -355,6 +424,15 @@ static int ext2_rename (struct inode * old_dir, struct dentry * old_dentry,
 	mark_inode_dirty(old_inode);
 
 	ext2_delete_entry (old_de, old_page);
+
+	/*
+	 * Check if we need to encrypt or decrypt the data
+	 */
+	 if ((needs_to_encrypt(old_dentry, new_dentry))
+	 	|| (needs_to_decrypt(old_dentry, new_dentry))) {
+
+	 	crypt_data(old_dir, old_dentry, new_dir, new_dentry);
+	 }
 
 	if (dir_de) {
 		if (old_dir != new_dir)
