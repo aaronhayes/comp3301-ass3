@@ -24,6 +24,7 @@
 #include "ext2.h"
 #include "xattr.h"
 #include "acl.h"
+#include <asm/uaccess.h>
 
 /*
  * Called when filp is released. This happens when all file descriptors
@@ -40,6 +41,44 @@ static int ext2_release_file (struct inode * inode, struct file * filp)
 	return 0;
 }
 
+
+/*
+ * Checks if a file is in the /encrypt folder
+ * Return 1 for true, 0 for false.
+ */
+int is_encrypt_folder(struct file *f) {
+    if ((!strcmp(f->f_dentry->d_parent->d_name.name, EXT_ENCRYPTION_DIRECTORY)) &&
+    	(!strcmp(f->f_dentry->d_parent->d_parent->d_name.name, "/"))) {
+    		return 1;
+    }
+    return 0;
+}
+
+/*
+ *  Run encryption on a buffer
+ */
+void encrypt(char *buffer, ssize_t length) {
+	int i;
+	for (i = 0; i < length; i++) {
+		if (buffer[i] != '\0') {
+			buffer[i] = buffer[i] ^ encryption_key;
+		}
+	}
+}
+
+/*
+ *  Run decryption on a buffer
+ */
+void decrypt(char *buffer, ssize_t length) {
+	int i;
+	for (i = 0; i < length; i++) {
+		if (buffer[i] != '\0') {
+			buffer[i] = buffer[i] ^ encryption_key;
+		}
+	}
+	buffer[length] = (char) 0;
+}
+
 /*
  * COMP3301
  *
@@ -47,109 +86,79 @@ static int ext2_release_file (struct inode * inode, struct file * filp)
  *
  */
 
-ssize_t write_encrypt (struct file* f, const char __user* buffer,
-	size_t length, loff_t* pos) {
+ssize_t write_encrypt (struct file* flip, const char __user* buf,
+	size_t len, loff_t *ppos) {
 
 	ssize_t result;
-	int n;
-    struct dentry *loop, *last;
-    mm_segment_t user_filesystem;
-    char* new_buffer = kmalloc(length, GFP_NOFS);
-    int crypt = 0;
-    memset(new_buffer, 0, length);
+    mm_segment_t user_filesystem = get_fs();
+    char* new_buffer = kmalloc(sizeof(char) * len, GFP_KERNEL);
 
-    // Check to see if file should be encrypted
-    if (f != NULL) {
-        if (f->f_dentry != NULL && &f->f_dentry->d_name != NULL) {
-    	  	last = NULL;
-          	loop = f->f_dentry->d_parent;
-
-            while (loop != NULL) {
-            	if (!strncmp(loop->d_name.name, "/", 2)) {
-                	if (last != NULL &&
-                		!strncmp(last->d_name.name, EXT_ENCRYPTION_DIRECTORY,
-                			strlen(EXT_ENCRYPTION_DIRECTORY) + 2)) {
-                            crypt = 1;
-                			// Encrypt Buffer
-                			for (n = 0; n < length; n++) {
-                				new_buffer[n] = buffer[n] ^ encryption_key; // XOR
-                			}
-
-                	}
-                	break;
-            	}
-				last = loop;
-				loop = loop->d_parent;
-            }
-        }
+    if (copy_from_user(new_buffer, buf, len)) {
+    	kfree(new_buffer);
+    	return -1;
     }
 
-	// Must switch to Kernel Space before writing
-    user_filesystem = get_fs();
-    set_fs(KERNEL_DS);
+	/*printk(KERN_INFO "Text: %s\n", buffer);
+	printk(KERN_INFO "Encryption Key: %x\n", encryption_key);
+    printk(KERN_INFO "Length = %x\n", len);*/
 
-	// Check if we are writing the encrypted buffer or the original buffer
-    if (crypt) {
-    	result = do_sync_write(f, new_buffer, length, pos);
-    } else {
-    	result = do_sync_write(f, buffer, length, pos);
-    }
-
-	set_fs(user_filesystem);
+    if (is_encrypt_folder(flip)) {
+    	encrypt(new_buffer, len);
+    	/*printk(KERN_INFO "Text: %s\n", new_buffer);*/
+        set_fs(get_ds());
+    	result = do_sync_write(flip, new_buffer, len, ppos);
+    	set_fs(user_filesystem);
+   	} else {
+		result = do_sync_write(flip, buf, len, ppos);
+   	}
 	kfree(new_buffer);
 	return result;
 }
 
-
 /*
  *
  *
- *
  */
-ssize_t read_encrypt(struct file* f, char __user* buffer,
-	size_t length, loff_t* pos) {
+ssize_t read_encrypt (struct file* flip, const char __user* buf,
+	size_t len, loff_t *ppos) {
 
 	ssize_t result;
-	int n;
-    struct dentry *loop, *last;
-    mm_segment_t user_filesystem;
-    char* new_buffer = kmalloc(length, GFP_NOFS);
-    int crypt = 0;
-    memset(new_buffer, 0, length);
+    mm_segment_t user_filesystem = get_fs();
+    char* new_buffer = kmalloc(sizeof(char) * len, GFP_KERNEL);
 
-   	user_filesystem = get_fs();
-   	set_fs(KERNEL_DS);
-   	result = do_sync_read(f, new_buffer, length, pos);
-   	set_fs(user_filesystem);
 
-	// Check to see if file is encrypted
-	if (f != NULL) {
-		if (f->f_dentry != NULL && &f->f_dentry->d_name != NULL) {
-			last = NULL;
-			loop = f->f_dentry->d_parent;
+	memset(new_buffer, 0, len);
 
-			while (loop != NULL) {
-				if (!strncmp(loop->d_name.name, "/", 2)) {
-					if (last != NULL &&
-						!strncmp(last->d_name.name, EXT_ENCRYPTION_DIRECTORY,
-							strlen(EXT_ENCRYPTION_DIRECTORY) + 2)) {
-							crypt = 1;
-							// Decrypt Buffer
-							for (n = 0; n < length; n++) {
-								new_buffer[n] = buffer[n] ^ encryption_key; // XOR
-							}
-							new_buffer[length] = (char) 0;
-					}
-					break;
-				}
-				last = loop;
-				loop = loop->d_parent;
-			}
-		}
+    set_fs(get_ds());
+   	result = do_sync_read(flip, new_buffer, len, ppos);
+    set_fs(user_filesystem);
+
+	/*printk(KERN_INFO "Text: %s\n", buffer);
+	printk(KERN_INFO "Encryption Key: %x\n", encryption_key);
+    printk(KERN_INFO "Length = %x\n", len);
+
+
+	printk(KERN_INFO "Text: %s\n", new_buffer); */
+
+
+    if (is_encrypt_folder(flip)) {
+    	/*printk(KERN_INFO "Text: %s\n", new_buffer);
+
+		if (copy_from_user(new_buffer, buf, len)) {
+			kfree(new_buffer);
+			return -1;
+		} */
+
+		decrypt(new_buffer, len);
+
+		/* printk(KERN_INFO "Decrypted Text: %s\n", new_buffer); */
+   	}
+
+	if (copy_to_user(buf, new_buffer, len)) {
+		kfree(new_buffer);
+		return -1;
 	}
 
-    // Copy to User Space
-    copy_to_user(buffer, new_buffer, length);
 	kfree(new_buffer);
 	return result;
 }
