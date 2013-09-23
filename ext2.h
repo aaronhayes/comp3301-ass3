@@ -23,6 +23,7 @@
  * Aaron Hayes
  */
 #define EXT_ENCRYPTION_DIRECTORY "encrypt"
+#define DEFAULT_ENCRYPTION_KEY 0
 extern int encryption_key;
 
 /* XXX Here for now... not interested in restructing headers JUST now */

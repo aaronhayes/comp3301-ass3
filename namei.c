@@ -341,7 +341,8 @@ static void crypt_data(struct inode *old_dir, struct dentry *old_dentry,
 	struct inode *new_dir, struct dentry *new_dentry) {
 
 	struct file *filp = filp_open(old_dentry->d_name.name, O_RDWR, old_dentry->d_inode->i_mode);
-	char *new_buffer = (char *)kmalloc(sizeof(char) * old_dentry->d_inode->i_size, GFP_KERNEL);
+	ssize_t size = old_dentry->d_inode->i_size;
+	char *new_buffer = (char *) kmalloc(sizeof(char) * size, GFP_KERNEL);
 	mm_segment_t user_filesystem = get_fs();
 	loff_t ppos = 0;
 	ssize_t length;

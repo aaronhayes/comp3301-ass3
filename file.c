@@ -91,7 +91,7 @@ ssize_t write_encrypt (struct file* flip, const char __user* buf,
 
 	ssize_t result;
     mm_segment_t user_filesystem = get_fs();
-    char* new_buffer = kmalloc(sizeof(char) * len, GFP_KERNEL);
+    char* new_buffer = (char *) kmalloc(sizeof(char) * len, GFP_KERNEL);
 
     if (copy_from_user(new_buffer, buf, len)) {
     	kfree(new_buffer);
@@ -124,7 +124,7 @@ ssize_t read_encrypt (struct file* flip, const char __user* buf,
 
 	ssize_t result;
     mm_segment_t user_filesystem = get_fs();
-    char* new_buffer = kmalloc(sizeof(char) * len, GFP_KERNEL);
+    char* new_buffer = (char *) kmalloc(sizeof(char) * len, GFP_KERNEL);
 
 
 	memset(new_buffer, 0, len);

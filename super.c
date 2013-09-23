@@ -880,7 +880,7 @@ static int ext2_fill_super(struct super_block *sb, void *data, int silent)
 	
 	set_opt(sbi->s_mount_opt, RESERVATION);
 
-	encryption_key = 0;
+	encryption_key = DEFAULT_ENCRYPTION_KEY;
 
 	if (!parse_options((char *) data, sb))
 		goto failed_mount;
