@@ -303,10 +303,25 @@ static int ext2_rmdir (struct inode * dir, struct dentry *dentry)
  * Return 1 for true, 0 otherwise
  */
 static int needs_to_encrypt(struct dentry *old_dentry, struct dentry *new_dentry) {
-	if ((strcmp(old_dentry->d_parent->d_name.name, new_dentry->d_parent->d_name.name))
-		&& (!strcmp(new_dentry->d_parent->d_name.name, EXT_ENCRYPTION_DIRECTORY))
-		&& (!strcmp(new_dentry->d_parent->d_parent->d_name.name, "/")))
-			return 1;
+    struct dentry *parent, *last;
+
+	if (new_dentry != NULL && new_dentry->d_parent != NULL) {
+		last = new_dentry;
+		parent = new_dentry->d_parent;
+
+		while (parent != NULL) {
+			if (!strcmp(parent->d_name.name, "/")) {
+				if (!strcmp(last->d_name.name, EXT_ENCRYPTION_DIRECTORY)) {
+					return 1;
+				} else {
+					break;
+				}
+			}
+			last = parent;
+			parent = parent->d_parent;
+		}
+	}
+
 	return 0;
 }
 
@@ -315,10 +330,25 @@ static int needs_to_encrypt(struct dentry *old_dentry, struct dentry *new_dentry
  * Return 1 for true, 0 otherwise
  */
 static int needs_to_decrypt(struct dentry *old_dentry, struct dentry *new_dentry) {
-	if ((strcmp(old_dentry->d_parent->d_name.name, new_dentry->d_parent->d_name.name))
-		&& (!strcmp(old_dentry->d_parent->d_name.name, EXT_ENCRYPTION_DIRECTORY))
-		&& (!strcmp(old_dentry->d_parent->d_parent->d_name.name, "/")))
-			return 1;
+    struct dentry *parent, *last;
+
+	if (old_dentry != NULL && old_dentry->d_parent != NULL) {
+		last = old_dentry;
+		parent = old_dentry->d_parent;
+
+		while (parent != NULL) {
+			if (!strcmp(parent->d_name.name, "/")) {
+				if (!strcmp(last->d_name.name, EXT_ENCRYPTION_DIRECTORY)) {
+					return 1;
+				} else {
+					break;
+				}
+			}
+			last = parent;
+			parent = parent->d_parent;
+		}
+	}
+
 	return 0;
 }
 
@@ -428,12 +458,14 @@ static int ext2_rename (struct inode * old_dir, struct dentry * old_dentry,
 
 	/*
 	 * Check if we need to encrypt or decrypt the data
+	 * If data needs to be encrypted and decrypted
+	 *  (moving between /encrypt structure) do nothing
 	 */
-	 if ((needs_to_encrypt(old_dentry, new_dentry))
-	 	|| (needs_to_decrypt(old_dentry, new_dentry))) {
-
-	 	crypt_data(old_dir, old_dentry, new_dir, new_dentry);
-	 }
+	if (!(needs_to_encrypt(old_dentry, new_dentry) && needs_to_decrypt(old_dentry, new_dentry))) {
+		if ((needs_to_encrypt(old_dentry, new_dentry)) || (needs_to_decrypt(old_dentry, new_dentry))) {
+			crypt_data(old_dir, old_dentry, new_dir, new_dentry);
+		}
+	}
 
 	if (dir_de) {
 		if (old_dir != new_dir)

@@ -47,10 +47,24 @@ static int ext2_release_file (struct inode * inode, struct file * filp)
  * Return 1 for true, 0 for false.
  */
 int is_encrypt_folder(struct file *f) {
-    if ((!strcmp(f->f_dentry->d_parent->d_name.name, EXT_ENCRYPTION_DIRECTORY)) &&
-    	(!strcmp(f->f_dentry->d_parent->d_parent->d_name.name, "/"))) {
-    		return 1;
-    }
+    struct dentry *parent, *last;
+
+	if (f != NULL && f->f_dentry != NULL && f->f_dentry->d_parent != NULL) {
+		last = f->f_dentry;
+		parent = f->f_dentry->d_parent;
+
+		while (parent != NULL) {
+			if (!strcmp(parent->d_name.name, "/")) {
+				if (!strcmp(last->d_name.name, EXT_ENCRYPTION_DIRECTORY)) {
+					return 1;
+				} else {
+					break;
+				}
+			}
+			last = parent;
+			parent = parent->d_parent;
+		}
+	}
     return 0;
 }
 
@@ -76,7 +90,7 @@ void decrypt(char *buffer, ssize_t length) {
 			buffer[i] = buffer[i] ^ encryption_key;
 		}
 	}
-	buffer[length] = (char) 0;
+	buffer[length] = '\0';
 }
 
 /*
@@ -109,7 +123,9 @@ ssize_t write_encrypt (struct file* flip, const char __user* buf,
     	result = do_sync_write(flip, new_buffer, len, ppos);
     	set_fs(user_filesystem);
    	} else {
-		result = do_sync_write(flip, buf, len, ppos);
+   		set_fs(get_ds());
+		result = do_sync_write(flip, new_buffer, len, ppos);
+		set_fs(user_filesystem);
    	}
 	kfree(new_buffer);
 	return result;
