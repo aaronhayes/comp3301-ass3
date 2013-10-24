@@ -27,6 +27,11 @@
 #include <asm/uaccess.h>
 
 /*
+ * Forward declarations
+ */
+ssize_t write_encrypt (struct file*, const char __user*, size_t, loff_t *);
+
+/*
  * Called when filp is released. This happens when all file descriptors
  * for a single struct file are closed. Note that different open() calls
  * for the same file yield different struct file structures.
@@ -93,17 +98,148 @@ void decrypt(char *buffer, ssize_t length) {
 	buffer[length] = '\0';
 }
 
+
 /*
- * COMP3301
- *
- *
+ * COMP3301 Addition
+ * Write immediate files data to the inode. Covert back to
+ * Regular files when the data exceeds the limit.
+ */
+ssize_t do_immediate_write (struct file* flip, const char __user* buf,
+	size_t len, loff_t *ppos, int need_to_encrypt) {
+
+	struct ext2_inode_info *inode_info = EXT2_I(flip->f_dentry->d_inode);
+	struct inode *inode = flip->f_dentry->d_inode;
+	char *data = (char *)inode_info->i_data;
+	char *con;
+	char *write = (char *) (EXT2_I(inode)->i_data);
+	struct ext2_dir_entry_2 *direntry;
+	struct page *page = NULL;
+	int err;
+
+	ssize_t result;
+
+
+	if (*ppos + len >= IMMEDIATE_FILE_SIZE) {
+		// Convert to regular file
+
+		/*if (strlen(data) && (flip->f_flags & O_APPEND)) {
+			con = (char *)kmalloc(strlen(data) + 1, GFP_KERNEL);
+			memset(con, data, strlen(data) - 1);
+			memcpy(data, 0, strlen(data));
+		    result = write_encrypt(flip, con, strlen(con) + 1, ppos);
+		} else {
+			memset(data, 0, strlen(data));
+			result = write_encrypt(flip, buf, strlen(con) + 1, ppos);
+		}
+
+        inode->i_mode = S_IFREG | (inode->i_mode ^ S_IFMT);
+
+		direntry = ext2_find_entry(inode, &flip->f_dentry->d_name, &page);
+		direntry->file_type = NORMAL_FILE;
+
+       	kunmap(page);
+       	page_cache_release(page);   */
+
+
+       	con = (char *) kmalloc(sizeof(char) * strlen(write) + 1, GFP_KERNEL);
+       	memset(con, 0, strlen(write) + 1);
+       	memcpy(con, write, strlen(write));
+       	con[strlen(write)] = 0;
+       	flip->f_pos = 0;
+
+       	inode->i_mode &= ~(S_IF_IMMEDIATE & S_IFMT);
+       	inode->i_mode |= S_IFREG & S_IFMT;
+
+        inode_info->i_data[0] = ext2_new_block(inode, 0, &err);
+        mark_inode_dirty(inode);
+
+		/*direntry = ext2_find_entry(inode, &flip->f_dentry->d_name, &page);
+		direntry->file_type = NORMAL_FILE;  */
+
+       	result = write_encrypt(flip, con, strlen(con), &flip->f_pos);
+       	kfree(con);
+
+       	result = write_encrypt(flip, buf, len, ppos);
+
+        return result;
+	}
+
+	/*printk(KERN_INFO "Text: %s\n", buffer);
+	printk(KERN_INFO "Encryption Key: %x\n", encryption_key);
+    printk(KERN_INFO "Length = %x\n", len);*/
+    printk(KERN_INFO "Writing File!!!\n");
+
+    if (need_to_encrypt) {
+    	encrypt(buf, len);
+    }
+
+	if (copy_from_user(data + *ppos, buf, len)) {
+		return -1;
+	}
+
+    *ppos += len;
+    flip->f_pos = *ppos;
+    inode->i_size += len;
+    mark_inode_dirty(inode);
+
+	return len;
+}
+
+/*
+ * Copy char * buffer into new buffer
+ */
+void copy_buffer(char *dest, char *source, int len) {
+	int n;
+	for (n = 0; n < len; n++) {
+		dest[n] = source[n];
+	}
+}
+
+/*
  *
  */
+ssize_t do_immediate_read (struct file* flip, const char __user* buf,
+	size_t len, loff_t *ppos) {
 
+	int newlen;
+    struct inode *inode = flip->f_dentry->d_inode;
+    struct ext2_inode_info *inode_info = EXT2_I(inode);
+    char* new_buffer = (char *) kmalloc(sizeof(char) * len, GFP_KERNEL);
+    char *data = (char *)inode_info->i_data;
+    copy_buffer(new_buffer, data, len);
+
+
+    /*if (*ppos == inode->i_size) {
+    	kfree(new_buffer);
+    	return 0;
+    }
+     */
+    if (*ppos + len > inode->i_size) {
+    	len -= ((*ppos + len) - inode->i_size);
+    }
+
+	if (copy_to_user(buf, new_buffer + *ppos, len)) {
+		kfree(new_buffer);
+		return -1;
+	}
+
+	kfree(new_buffer);
+	*ppos += len;
+
+    return len;
+}
+
+
+/*
+ * COMP3301 Addition
+ * Use the encryption key to change the content of a buffer
+ *  then write the buffer to the FS
+ */
 ssize_t write_encrypt (struct file* flip, const char __user* buf,
 	size_t len, loff_t *ppos) {
 
 	ssize_t result;
+	struct inode *inode = flip->f_dentry->d_inode;
     mm_segment_t user_filesystem = get_fs();
     char* new_buffer = (char *) kmalloc(sizeof(char) * len, GFP_KERNEL);
 
@@ -115,30 +251,46 @@ ssize_t write_encrypt (struct file* flip, const char __user* buf,
 	/*printk(KERN_INFO "Text: %s\n", buffer);
 	printk(KERN_INFO "Encryption Key: %x\n", encryption_key);
     printk(KERN_INFO "Length = %x\n", len);*/
+    printk(KERN_INFO "Testing File!!!\n");
 
     if (is_encrypt_folder(flip)) {
-    	encrypt(new_buffer, len);
+    	//encrypt(new_buffer, len);
     	/*printk(KERN_INFO "Text: %s\n", new_buffer);*/
         set_fs(get_ds());
-    	result = do_sync_write(flip, new_buffer, len, ppos);
+        if (S_IS_IMMEDIATE(inode->i_mode)) {
+        	printk(KERN_INFO "Intermediate File!!!\n");
+    		result = do_immediate_write(flip, new_buffer, len, ppos, 1);
+    	} else {
+    		encrypt(new_buffer, len);
+    		result = do_sync_write(flip, new_buffer, len, ppos);
+    	}
     	set_fs(user_filesystem);
    	} else {
    		set_fs(get_ds());
-		result = do_sync_write(flip, new_buffer, len, ppos);
+        if (S_IS_IMMEDIATE(inode->i_mode)) {
+        	printk(KERN_INFO "Intermediate File!!!\n");
+    		result = do_immediate_write(flip, new_buffer, len, ppos, 0);
+    	} else {
+    		result = do_sync_write(flip, new_buffer, len, ppos);
+    	}
 		set_fs(user_filesystem);
    	}
 	kfree(new_buffer);
 	return result;
 }
 
+
+
 /*
- *
- *
+ * COMP3301 Addition
+ * Use the encryption key to change the content of a buffer
+ *  then read the buffer to user
  */
 ssize_t read_encrypt (struct file* flip, const char __user* buf,
 	size_t len, loff_t *ppos) {
 
 	ssize_t result;
+    struct inode *inode = flip->f_dentry->d_inode;
     mm_segment_t user_filesystem = get_fs();
     char* new_buffer = (char *) kmalloc(sizeof(char) * len, GFP_KERNEL);
 
@@ -146,15 +298,21 @@ ssize_t read_encrypt (struct file* flip, const char __user* buf,
 	memset(new_buffer, 0, len);
 
     set_fs(get_ds());
-   	result = do_sync_read(flip, new_buffer, len, ppos);
+    printk(KERN_INFO "Testing File!!!\n");
+    if (S_IS_IMMEDIATE(inode->i_mode)) {
+    	printk(KERN_INFO "Intermediate File!!!\n");
+    	result = do_immediate_read(flip, new_buffer, len, ppos);
+    } else {
+   		result = do_sync_read(flip, new_buffer, len, ppos);
+   	}
     set_fs(user_filesystem);
 
 	/*printk(KERN_INFO "Text: %s\n", buffer);
 	printk(KERN_INFO "Encryption Key: %x\n", encryption_key);
-    printk(KERN_INFO "Length = %x\n", len);
+    printk(KERN_INFO "Length = %x\n", len);*/
 
 
-	printk(KERN_INFO "Text: %s\n", new_buffer); */
+	printk(KERN_INFO "Text: %s\n", new_buffer);
 
 
     if (is_encrypt_folder(flip)) {

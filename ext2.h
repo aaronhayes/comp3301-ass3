@@ -24,6 +24,13 @@
  */
 #define EXT_ENCRYPTION_DIRECTORY "encrypt"
 #define DEFAULT_ENCRYPTION_KEY 0
+#define IMMEDIATE_FILE_SIZE 60
+#define NORMAL_FILE 1
+#define DT_IM 5
+#define D_FILE_TYPE 8
+#define S_IF_IMMEDIATE 050000
+
+#define S_IS_IMMEDIATE(m) (((m) & S_IF_IMMEDIATE) == S_IF_IMMEDIATE)
 extern int encryption_key;
 
 /* XXX Here for now... not interested in restructing headers JUST now */
