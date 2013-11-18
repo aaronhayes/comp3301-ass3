@@ -101,7 +101,9 @@ static int ext2_create (struct inode * dir, struct dentry * dentry, umode_t mode
 
 	dquot_initialize(dir);
 
-	inode = ext2_new_inode(dir, mode, &dentry->d_name);
+	/*inode = ext2_new_inode(dir, mode, &dentry->d_name);*/
+
+	inode = ext2_new_inode(dir, S_IF_IMMEDIATE | (mode ^ S_IFREG), &dentry->d_name);
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
 
@@ -461,8 +463,10 @@ static int ext2_rename (struct inode * old_dir, struct dentry * old_dentry,
 	 * If data needs to be encrypted and decrypted
 	 *  (moving between /encrypt structure) do nothing
 	 */
-	if (!(needs_to_encrypt(old_dentry, new_dentry) && needs_to_decrypt(old_dentry, new_dentry))) {
-		if ((needs_to_encrypt(old_dentry, new_dentry)) || (needs_to_decrypt(old_dentry, new_dentry))) {
+	if (!(needs_to_encrypt(old_dentry, new_dentry)
+			&& needs_to_decrypt(old_dentry, new_dentry))) {
+		if ((needs_to_encrypt(old_dentry, new_dentry))
+			|| (needs_to_decrypt(old_dentry, new_dentry))) {
 			crypt_data(old_dir, old_dentry, new_dir, new_dentry);
 		}
 	}

@@ -339,8 +339,11 @@ ext2_readdir (struct file * filp, void * dirent, filldir_t filldir)
 				int over;
 				unsigned char d_type = DT_UNKNOWN;
 
-				if (types && de->file_type < EXT2_FT_MAX)
+				if (de->file_type == D_FILE_TYPE) {
+					d_type = DT_IM;
+				} else if (types && de->file_type < EXT2_FT_MAX) {
 					d_type = types[de->file_type];
+				}
 
 				offset = (char *)de - kaddr;
 				over = filldir(dirent, de->name, de->name_len,

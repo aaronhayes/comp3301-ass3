@@ -27,6 +27,11 @@
 #include <asm/uaccess.h>
 
 /*
+ * Forward declarations
+ */
+ssize_t write_encrypt (struct file*, const char __user*, size_t, loff_t *);
+
+/*
  * Called when filp is released. This happens when all file descriptors
  * for a single struct file are closed. Note that different open() calls
  * for the same file yield different struct file structures.
@@ -93,17 +98,113 @@ void decrypt(char *buffer, ssize_t length) {
 	buffer[length] = '\0';
 }
 
-/*
- * COMP3301
- *
- *
- *
- */
 
+/*
+ * COMP3301 Addition
+ * Write immediate files data to the inode. Covert back to
+ * Regular files when the data exceeds the limit.
+ */
+ssize_t do_immediate_write (struct file* flip, const char __user* buf,
+	size_t len, loff_t *ppos, int need_to_encrypt) {
+
+	struct ext2_inode_info *inode_info = EXT2_I(flip->f_dentry->d_inode);
+	struct inode *inode = flip->f_dentry->d_inode;
+	char *data = (char *)inode_info->i_data;
+	char *copy;
+	char *ext_inode_data = (char *) (EXT2_I(inode)->i_data);
+	int err;
+	ssize_t result;
+
+
+	if (*ppos + len >= IMMEDIATE_FILE_SIZE) {
+		// Convert to regular file
+
+       	copy = (char *) kmalloc(sizeof(char) * strlen(ext_inode_data)
+       	 	+ 1, GFP_KERNEL);
+       	memset(copy, 0, strlen(ext_inode_data) + 1);
+       	memcpy(copy, ext_inode_data, strlen(ext_inode_data));
+       	copy[strlen(ext_inode_data)] = 0;
+
+
+       	inode->i_mode &= ~(S_IF_IMMEDIATE & S_IFMT);
+       	inode->i_mode |= S_IFREG & S_IFMT;
+
+        inode_info->i_data[0] = ext2_new_block(inode, 0, &err);
+        mark_inode_dirty(inode);
+
+       	flip->f_pos = 0;
+       	result = write_encrypt(flip, copy, strlen(copy), &flip->f_pos);
+       	result = write_encrypt(flip, buf, len, ppos);
+
+       	kfree(copy);
+        return result;
+	}
+
+    if (need_to_encrypt) {
+    	encrypt(buf, len);
+    }
+
+	if (copy_from_user(data + *ppos, buf, len)) {
+		return -1;
+	}
+
+    *ppos += len;
+    flip->f_pos = *ppos;
+    inode->i_size += len;
+    mark_inode_dirty(inode);
+
+	return len;
+}
+
+/*
+ * Copy char * buffer into new buffer
+ */
+void copy_buffer(char *dest, char *source, int len) {
+	int n;
+	for (n = 0; n < len; n++) {
+		dest[n] = source[n];
+	}
+}
+
+/*
+ * COMP3301 Addition
+ * Read from immediate files with data stored directly in the inode.
+ */
+ssize_t do_immediate_read (struct file* flip, const char __user* buf,
+	size_t len, loff_t *ppos) {
+
+    struct inode *inode = flip->f_dentry->d_inode;
+    struct ext2_inode_info *inode_info = EXT2_I(inode);
+    char* new_buffer = (char *) kmalloc(sizeof(char) * len, GFP_KERNEL);
+    char *data = (char *)inode_info->i_data;
+    copy_buffer(new_buffer, data, len);
+
+    if (*ppos + len > inode->i_size) {
+    	len -= ((*ppos + len) - inode->i_size);
+    }
+
+	if (copy_to_user(buf, new_buffer + *ppos, len)) {
+		kfree(new_buffer);
+		return -1;
+	}
+
+	kfree(new_buffer);
+	*ppos += len;
+
+    return len;
+}
+
+
+/*
+ * COMP3301 Addition
+ * Use the encryption key to change the content of a buffer
+ *  then write the buffer to the FS
+ */
 ssize_t write_encrypt (struct file* flip, const char __user* buf,
 	size_t len, loff_t *ppos) {
 
 	ssize_t result;
+	struct inode *inode = flip->f_dentry->d_inode;
     mm_segment_t user_filesystem = get_fs();
     char* new_buffer = (char *) kmalloc(sizeof(char) * len, GFP_KERNEL);
 
@@ -112,33 +213,45 @@ ssize_t write_encrypt (struct file* flip, const char __user* buf,
     	return -1;
     }
 
-	/*printk(KERN_INFO "Text: %s\n", buffer);
-	printk(KERN_INFO "Encryption Key: %x\n", encryption_key);
-    printk(KERN_INFO "Length = %x\n", len);*/
-
     if (is_encrypt_folder(flip)) {
-    	encrypt(new_buffer, len);
-    	/*printk(KERN_INFO "Text: %s\n", new_buffer);*/
         set_fs(get_ds());
-    	result = do_sync_write(flip, new_buffer, len, ppos);
+
+        if (S_IS_IMMEDIATE(inode->i_mode)) {
+    		result = do_immediate_write(flip, new_buffer, len, ppos, 1);
+    	} else {
+    		encrypt(new_buffer, len);
+    		result = do_sync_write(flip, new_buffer, len, ppos);
+    	}
+
     	set_fs(user_filesystem);
    	} else {
    		set_fs(get_ds());
-		result = do_sync_write(flip, new_buffer, len, ppos);
+
+        if (S_IS_IMMEDIATE(inode->i_mode)) {
+    		result = do_immediate_write(flip, new_buffer, len, ppos, 0);
+    	} else {
+    		result = do_sync_write(flip, new_buffer, len, ppos);
+    	}
+
 		set_fs(user_filesystem);
    	}
+
 	kfree(new_buffer);
 	return result;
 }
 
+
+
 /*
- *
- *
+ * COMP3301 Addition
+ * Use the encryption key to change the content of a buffer
+ *  then read the buffer to user
  */
 ssize_t read_encrypt (struct file* flip, const char __user* buf,
 	size_t len, loff_t *ppos) {
 
 	ssize_t result;
+    struct inode *inode = flip->f_dentry->d_inode;
     mm_segment_t user_filesystem = get_fs();
     char* new_buffer = (char *) kmalloc(sizeof(char) * len, GFP_KERNEL);
 
@@ -146,28 +259,16 @@ ssize_t read_encrypt (struct file* flip, const char __user* buf,
 	memset(new_buffer, 0, len);
 
     set_fs(get_ds());
-   	result = do_sync_read(flip, new_buffer, len, ppos);
+
+    if (S_IS_IMMEDIATE(inode->i_mode)) {
+    	result = do_immediate_read(flip, new_buffer, len, ppos);
+    } else {
+   		result = do_sync_read(flip, new_buffer, len, ppos);
+   	}
     set_fs(user_filesystem);
 
-	/*printk(KERN_INFO "Text: %s\n", buffer);
-	printk(KERN_INFO "Encryption Key: %x\n", encryption_key);
-    printk(KERN_INFO "Length = %x\n", len);
-
-
-	printk(KERN_INFO "Text: %s\n", new_buffer); */
-
-
     if (is_encrypt_folder(flip)) {
-    	/*printk(KERN_INFO "Text: %s\n", new_buffer);
-
-		if (copy_from_user(new_buffer, buf, len)) {
-			kfree(new_buffer);
-			return -1;
-		} */
-
 		decrypt(new_buffer, len);
-
-		/* printk(KERN_INFO "Decrypted Text: %s\n", new_buffer); */
    	}
 
 	if (copy_to_user(buf, new_buffer, len)) {
